@@ -1,0 +1,1075 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<title>Hier · Fraktale in Echtzeit</title>
+<style>
+  :root {
+    --fg: #f4f1ea;
+    --muted: rgba(244, 241, 234, .66);
+    --faint: rgba(244, 241, 234, .38);
+    --glass: rgba(14, 15, 20, .46);
+    --line: rgba(255, 255, 255, .13);
+    --accent: #ffc27a;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%; overflow: hidden;
+    background: #000; color: var(--fg);
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -webkit-tap-highlight-color: transparent;
+    user-select: none; -webkit-user-select: none;
+  }
+  canvas {
+    position: fixed; inset: 0; width: 100%; height: 100%;
+    display: block; touch-action: none; cursor: grab;
+  }
+  canvas:active { cursor: grabbing; }
+  .mono { font-family: var(--mono); }
+
+  /* dezente Verläufe, damit Text auch über hellen Szenen lesbar bleibt */
+  .scrim { position: fixed; left: 0; right: 0; pointer-events: none; transition: opacity .5s; }
+  .scrim.top { top: 0; height: 220px; background: linear-gradient(rgba(0,0,0,.55), rgba(0,0,0,0)); }
+  .scrim.bottom { bottom: 0; height: 160px; background: linear-gradient(rgba(0,0,0,0), rgba(0,0,0,.5)); }
+  body.bright .scrim.top { height: 260px; background: linear-gradient(rgba(0,0,0,.72), rgba(0,0,0,.25) 60%, rgba(0,0,0,0)); }
+  body.bright .scrim.bottom { background: linear-gradient(rgba(0,0,0,0), rgba(0,0,0,.6)); }
+
+  .hud { position: fixed; pointer-events: none; transition: opacity .5s ease; text-shadow: 0 1px 12px rgba(0,0,0,.55); }
+  body.hide-ui .hud, body.hide-ui .scrim, body.intro .hud { opacity: 0; }
+  body.intro .hud { transition: opacity 1.4s ease .3s; }
+  body.hide-ui .hud * { pointer-events: none !important; }
+
+  #info {
+    top: calc(18px + env(safe-area-inset-top)); left: calc(18px + env(safe-area-inset-left));
+    max-width: min(440px, calc(100vw - 36px));
+  }
+  .brand {
+    font: 600 11px/1 var(--mono); letter-spacing: .3em; text-transform: uppercase; color: var(--accent);
+  }
+  .brand span { color: var(--faint); letter-spacing: .18em; }
+  #name {
+    margin: .42em 0 .18em; font-size: clamp(30px, 5.2vw, 52px); font-weight: 680;
+    letter-spacing: -.025em; line-height: 1.02;
+  }
+  #sub { margin: 0; font-size: 14.5px; line-height: 1.5; color: var(--muted); max-width: 38ch; }
+  #formula { margin-top: .9em; font-size: 12px; color: var(--accent); white-space: pre; min-height: 1.3em; }
+
+  #stats {
+    top: calc(18px + env(safe-area-inset-top)); right: calc(18px + env(safe-area-inset-right));
+    text-align: right; font: 11px/1.75 var(--mono); color: var(--faint);
+  }
+  #stats b { color: var(--fg); font-weight: 600; font-variant-numeric: tabular-nums; }
+  #paused { color: var(--accent) !important; display: none; }
+  body.paused #paused { display: block; }
+
+  #bar {
+    left: 16px; right: 16px; bottom: calc(16px + env(safe-area-inset-bottom));
+    display: flex; flex-direction: column; align-items: center; gap: 10px;
+  }
+  #scenes {
+    pointer-events: auto; display: flex; gap: 4px; padding: 5px; max-width: 100%;
+    overflow-x: auto; scrollbar-width: none;
+    background: var(--glass); border: 1px solid var(--line); border-radius: 999px;
+    backdrop-filter: blur(16px) saturate(150%); -webkit-backdrop-filter: blur(16px) saturate(150%);
+    box-shadow: 0 10px 40px rgba(0,0,0,.35);
+  }
+  #scenes::-webkit-scrollbar { display: none; }
+  #scenes button {
+    appearance: none; border: 0; background: transparent; color: var(--muted);
+    font: 550 13px/1 inherit; padding: 10px 15px; border-radius: 999px; cursor: pointer;
+    white-space: nowrap; transition: background .25s, color .25s; text-shadow: none;
+  }
+  #scenes button:hover { color: var(--fg); background: rgba(255,255,255,.08); }
+  #scenes button.on { background: var(--fg); color: #111; }
+  #scenes button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  #scenes kbd { font: 600 10px/1 var(--mono); opacity: .5; margin-right: 7px; }
+  #scenes .short { display: none; }
+  .hint { font-size: 12px; color: var(--muted); text-align: center; line-height: 1.5; }
+  @media (hover: none) { .desk { display: none; } }
+  @media (hover: hover) { .touch { display: none; } }
+  @media (max-width: 560px) {
+    #sub { font-size: 13px; }
+    #stats {
+      top: auto; left: 0; right: 0; bottom: calc(100px + env(safe-area-inset-bottom));
+      display: flex; justify-content: center; gap: 14px; font-size: 10px; text-align: center;
+    }
+    #scenes kbd, #scenes .long { display: none; }
+    #scenes .short { display: inline; }
+    #scenes button { padding: 10px 12px; font-size: 12.5px; }
+  }
+
+  #intro {
+    position: fixed; inset: 0; display: grid; place-content: center; text-align: center;
+    padding: 24px; pointer-events: none; transition: opacity 1.2s ease, transform 1.4s ease;
+  }
+  #intro.gone { opacity: 0; transform: scale(1.04); }
+  #intro .l1 {
+    margin: 0; font-size: clamp(26px, 4.6vw, 54px); font-weight: 700; letter-spacing: -.03em;
+    text-shadow: 0 2px 30px rgba(0,0,0,.8);
+  }
+  #intro .l2 {
+    margin: .8em auto 0; max-width: 46ch; font-size: clamp(14px, 1.6vw, 17px); line-height: 1.55;
+    color: var(--muted); text-shadow: 0 1px 16px rgba(0,0,0,.9);
+  }
+
+  #toast {
+    position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%) scale(.96);
+    padding: 10px 16px; border-radius: 12px; background: var(--glass); border: 1px solid var(--line);
+    backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+    font-size: 13px; opacity: 0; pointer-events: none; transition: opacity .3s, transform .3s;
+  }
+  #toast.show { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+
+  #fade { position: fixed; inset: 0; background: #000; pointer-events: none; transition: opacity .35s ease; }
+  #fade.off { opacity: 0; }
+
+  #err {
+    position: fixed; inset: 0; display: grid; place-content: center; padding: 24px; text-align: center;
+    color: var(--muted); font-size: 15px; line-height: 1.6;
+  }
+  #err pre { text-align: left; max-width: 90vw; max-height: 50vh; overflow: auto; font-size: 11px; color: var(--faint); }
+</style>
+</head>
+<body class="intro">
+<canvas id="gl" aria-label="Echtzeit gerenderte 3D-Fraktale"></canvas>
+<div class="scrim top"></div>
+<div class="scrim bottom"></div>
+
+<section id="info" class="hud">
+  <div class="brand">hier<span> / echtzeit-raymarching</span></div>
+  <h1 id="name">&nbsp;</h1>
+  <p id="sub"></p>
+  <div id="formula" class="mono"></div>
+</section>
+
+<section id="stats" class="hud">
+  <div><b id="fps">–</b> fps</div>
+  <div><b id="rays">–</b> Strahlen/s</div>
+  <div><b id="res">–</b></div>
+  <div id="paused">⏸ pausiert</div>
+</section>
+
+<section id="bar" class="hud">
+  <nav id="scenes" aria-label="Szenen"></nav>
+  <div class="hint">
+    <span class="desk">Ziehen: drehen · Mausrad: zoomen · 1–4: Szene · Leertaste: Pause · S: Screenshot · H: UI aus</span>
+    <span class="touch">Ziehen: drehen · Zwei Finger: zoomen · Doppeltipp: UI aus</span>
+  </div>
+</section>
+
+<div id="intro">
+  <p class="l1">Jeder Pixel ist ein Lichtstrahl.</p>
+  <p class="l2">Kein Foto. Kein 3D-Modell. Keine Bibliothek.<br>Nur Mathematik – live berechnet auf deiner Grafikkarte.</p>
+</div>
+<div id="toast"></div>
+<div id="fade"></div>
+<div id="err" hidden></div>
+
+<script>
+(() => {
+'use strict';
+
+/* =====================================================================
+   GLSL – gemeinsamer Teil. Jede Szene liefert davor:
+     mapT(p, trap)  Distanzschätzung + "Orbit Trap" für die Färbung
+     surfColor()    Materialfarbe aus dem Orbit Trap
+     trapOcc()      Verdeckung aus dem Orbit Trap
+     + Konstanten für Licht, Himmel, Nebel, Qualität
+   ===================================================================== */
+
+const VERT = `attribute vec2 aPos; void main(){ gl_Position = vec4(aPos, 0.0, 1.0); }`;
+
+const FRAG_HEAD = `
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+precision highp float;
+#else
+precision mediump float;
+#endif
+uniform vec2  uRes;
+uniform float uTime;
+uniform vec3  uRo;
+uniform vec3  uTa;
+uniform float uFocal;
+uniform float uParam;
+uniform vec4  uC;
+uniform vec3  uLight;
+#define LIGHT_DIR uLight
+#define SHORT_SIDE min(uRes.x, uRes.y)
+`;
+
+const FRAG_COMMON = `
+float map(vec3 p) { vec4 tr; return mapT(p, tr); }
+
+vec2 iSphere(vec3 ro, vec3 rd, float r) {
+  float b = dot(ro, rd);
+  float c = dot(ro, ro) - r*r;
+  float h = b*b - c;
+  if (h < 0.0) return vec2(-1.0);
+  h = sqrt(h);
+  return vec2(-b - h, -b + h);
+}
+
+float hash13(vec3 p3) {
+  p3 = fract(p3 * 0.1031);
+  p3 += dot(p3, p3.zyx + 31.32);
+  return fract((p3.x + p3.y) * p3.z);
+}
+float hash12(vec2 p) {
+  vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.x + p3.y) * p3.z);
+}
+
+vec3 background(vec3 rd) {
+  vec3 L = normalize(LIGHT_DIR);
+  vec3 col = mix(BG_BOT, BG_TOP, smoothstep(BG_LO, BG_HI, rd.y));
+  float s = max(dot(rd, L), 0.0);
+  col += SUN_COL * (0.10*pow(s, 5.0) + 0.6*pow(s, 400.0));
+#if STARS
+  vec3 q = rd * 240.0;
+  vec3 id = floor(q);
+  float h = hash13(id);
+  if (h > 0.986) {
+    float b = smoothstep(0.42, 0.0, length(fract(q) - 0.5)) * (h - 0.986) / 0.014;
+    col += b * mix(vec3(0.55, 0.7, 1.0), vec3(1.0, 0.82, 0.6), hash13(id + 7.0)) * 2.0;
+  }
+#endif
+  return col;
+}
+
+// Sphere Tracing: in jedem Schritt so weit gehen, wie die Distanzschätzung garantiert frei ist.
+float march(vec3 ro, vec3 rd, out vec4 trap, out float steps) {
+  float tmin = 0.0005;
+  float tmax = FAR;
+  steps = 0.0;
+  trap = vec4(0.0);
+#ifdef BOUND
+  vec2 bb = iSphere(ro, rd, BOUND);
+  if (bb.y < 0.0) return -1.0;
+  tmin = max(tmin, bb.x);
+  tmax = min(tmax, bb.y);
+#endif
+  float pix = 1.0 / (SHORT_SIDE * uFocal);   // halbe Pixelgröße pro Einheit Abstand
+  float t = tmin;
+  float res = -1.0;
+  for (int i = 0; i < MAX_STEPS; i++) {
+    vec4 tr;
+    float h = mapT(ro + rd*t, tr);
+    trap = tr;
+    if (h < max(0.00002, pix*t*PREC)) { res = t; break; }
+    t += h * STEP_K;
+    steps += 1.0;
+    if (t > tmax) break;
+  }
+  if (res < 0.0 && t < tmax && steps > float(MAX_STEPS) - 0.5) res = t;
+  return res;
+}
+
+vec3 calcNormal(vec3 p, float e) {
+  vec3 n = vec3(0.0);
+  for (int i = 0; i < 4; i++) {
+    vec3 k = (i == 0) ? vec3(1.0, -1.0, -1.0)
+           : (i == 1) ? vec3(-1.0, -1.0, 1.0)
+           : (i == 2) ? vec3(-1.0, 1.0, -1.0)
+           :            vec3(1.0, 1.0, 1.0);
+    n += k * map(p + k*e);
+  }
+  return normalize(n);
+}
+
+float calcAO(vec3 p, vec3 n) {
+  float occ = 0.0;
+  float sca = 1.0;
+  for (int i = 0; i < 5; i++) {
+    float h = (0.01 + 0.12*float(i)/4.0) * AO_SCALE;
+    float d = map(p + h*n);
+    occ += (h - d) * sca;
+    sca *= 0.92;
+  }
+  return clamp(1.0 - 3.0*occ/AO_SCALE, 0.0, 1.0);
+}
+
+// Weiche Schatten: wie nah streift der Strahl zum Licht an Geometrie vorbei?
+float softShadow(vec3 ro, vec3 rd, float tmin) {
+  float res = 1.0;
+  float t = tmin;
+  for (int i = 0; i < SHADOW_STEPS; i++) {
+    float h = map(ro + rd*t);
+    res = min(res, SHADOW_K*h/t);
+    t += clamp(h, 0.002, SHADOW_FAR*0.08);
+    if (res < 0.002 || t > SHADOW_FAR) break;
+  }
+  res = clamp(res, 0.0, 1.0);
+  return res*res*(3.0 - 2.0*res);
+}
+
+vec3 aces(vec3 x) {
+  return clamp((x*(2.51*x + 0.03)) / (x*(2.43*x + 0.59) + 0.14), 0.0, 1.0);
+}
+
+vec3 render(vec3 ro, vec3 rd) {
+  vec4 tr;
+  float steps;
+  float t = march(ro, rd, tr, steps);
+  vec3 bg = background(rd);
+  vec3 col = bg;
+  float g = steps / float(MAX_STEPS);
+  if (t > 0.0) {
+    vec3 p = ro + rd*t;
+    float px = t / (SHORT_SIDE * uFocal);
+    vec3 n = calcNormal(p, max(px, 0.00004));
+    vec3 L = normalize(LIGHT_DIR);
+    vec3 H = normalize(L - rd);
+    vec3 alb = surfColor(tr, p, n);
+    float occ = trapOcc(tr);
+#if USE_AO
+    occ *= calcAO(p, n);
+#endif
+    float dif = clamp(dot(n, L), 0.0, 1.0);
+    float sha = 1.0;
+#if USE_SHADOW
+    sha = 0.0;
+    if (dif > 0.001) sha = softShadow(p + n*px*3.0, L, 0.003 + px*6.0);
+#endif
+    float sky = clamp(0.6 + 0.4*n.y, 0.0, 1.0);
+    float bac = clamp(0.2 + 0.8*dot(n, normalize(vec3(-L.x, 0.0, -L.z))), 0.0, 1.0);
+    float fre = pow(clamp(1.0 + dot(n, rd), 0.0, 1.0), 2.0);
+    float spe = pow(clamp(dot(n, H), 0.0, 1.0), SPEC_POW) * dif * sha;
+    spe *= 0.04 + 0.96*pow(clamp(1.0 - dot(H, L), 0.0, 1.0), 5.0);
+
+    vec3 lin = KEY_COL*dif*sha
+             + SKY_COL*sky*occ
+             + BACK_COL*bac*occ
+             + RIM_COL*fre*(0.3 + 0.7*occ);
+    col = alb*lin + KEY_COL*spe*SPEC_K;
+    col = mix(col, bg, 1.0 - exp(-FOG_DENS*t*t));
+    g *= 0.2;
+  }
+  col += GLOW_COL * g*g * GLOW_K;
+  return col;
+}
+
+void main() {
+  vec2 fc = gl_FragCoord.xy;
+  vec2 p = (2.0*fc - uRes) / SHORT_SIDE;
+  vec3 ww = normalize(uTa - uRo);
+  vec3 uu = normalize(cross(ww, vec3(0.0, 1.0, 0.0)));
+  vec3 vv = cross(uu, ww);
+  vec3 rd = normalize(p.x*uu + p.y*vv + uFocal*ww);
+
+  vec3 col = render(uRo, rd);
+
+  col = aces(col * EXPOSURE);
+  col = pow(col, vec3(0.4545));
+  vec2 q = fc / uRes;
+  col *= 0.4 + 0.6*pow(16.0*q.x*q.y*(1.0 - q.x)*(1.0 - q.y), 0.18);
+  col += (hash12(fc + fract(uTime)*97.0) - 0.5) / 128.0;   // Dithering gegen Banding
+  gl_FragColor = vec4(col, 1.0);
+}
+`;
+
+/* =====================================================================
+   Szenen
+   ===================================================================== */
+
+const fmt = (x, d = 2) => (x < 0 ? '−' : '+') + Math.abs(x).toFixed(d);
+const smoothstep = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+
+const SCENES = [
+  {
+    key: 'bulb',
+    name: 'Mandelbulb',
+    short: 'Bulb',
+    sub: 'Die dreidimensionale Verwandte der Mandelbrot-Menge. Unendlich viel Detail, egal wie nah du heranzoomst.',
+    cam: { mode: 'orbit', target: [0, 0, 0], yaw: 0.75, pitch: 0.42, dist: 2.75, min: 1.3, max: 6, spin: 0.06, pmin: -1.4, pmax: 1.4 },
+    light: { dir: [0.75, 0.62, 0.08], follow: true },
+    uniforms: t => ({ param: 8, c: [0.42 * Math.sin(t * 0.21), 0.55 * Math.sin(t * 0.15 + 1.3), 0, 0] }),
+    label: u => `z ↦ z⁸ + c   ·   Phase θ ${fmt(u.c[0])}  φ ${fmt(u.c[1])}`,
+    glsl: `
+#define BOUND 1.2
+#define FAR 12.0
+#define MAX_STEPS 170
+#define STEP_K 1.0
+#define PREC 1.0
+#define USE_AO 1
+#define AO_SCALE 0.5
+#define USE_SHADOW 1
+#define SHADOW_STEPS 48
+#define SHADOW_FAR 2.4
+#define SHADOW_K 10.0
+#define STARS 1
+#define SPEC_POW 48.0
+#define SPEC_K 3.0
+#define FOG_DENS 0.0
+#define GLOW_K 0.9
+#define EXPOSURE 1.0
+#define BG_LO -0.6
+#define BG_HI 1.0
+const vec3 KEY_COL  = vec3(3.6, 2.7, 1.9);
+const vec3 SKY_COL  = vec3(0.30, 0.42, 0.62);
+const vec3 BACK_COL = vec3(0.34, 0.18, 0.10);
+const vec3 RIM_COL  = vec3(0.35, 0.45, 0.75);
+const vec3 SUN_COL  = vec3(0.45, 0.32, 0.22);
+const vec3 BG_TOP   = vec3(0.020, 0.030, 0.075);
+const vec3 BG_BOT   = vec3(0.002, 0.002, 0.006);
+const vec3 GLOW_COL = vec3(0.30, 0.52, 1.00);
+
+float mapT(vec3 p, out vec4 trap) {
+  vec3 w = p;
+  float m = dot(w, w);
+  vec4 tr = vec4(abs(w), m);
+  float dz = 1.0;
+  for (int i = 0; i < 6; i++) {
+    float r = sqrt(m);
+    float r7 = pow(r, 7.0);
+    dz = 8.0*r7*dz + 1.0;
+    float th = 8.0*acos(clamp(w.y/r, -1.0, 1.0)) + uC.x;
+    float ph = 8.0*atan(w.x, w.z) + uC.y;
+    w = p + r7*r*vec3(sin(th)*sin(ph), cos(th), sin(th)*cos(ph));
+    tr = min(tr, vec4(abs(w), m));
+    m = dot(w, w);
+    if (m > 256.0) break;
+  }
+  trap = vec4(m, tr.yzw);
+  return 0.25*log(m)*sqrt(m)/dz;
+}
+
+vec3 surfColor(vec4 tr, vec3 p, vec3 n) {
+  vec3 col = vec3(0.02, 0.018, 0.016);
+  col = mix(col, vec3(0.62, 0.40, 0.18), clamp(tr.y*1.1, 0.0, 1.0));
+  col = mix(col, vec3(0.06, 0.20, 0.42), clamp(tr.z*tr.z*1.2, 0.0, 1.0));
+  col = mix(col, vec3(0.70, 0.22, 0.06), clamp(pow(tr.w, 6.0), 0.0, 1.0));
+  return col*0.55;
+}
+float trapOcc(vec4 tr) { return clamp(0.25 + 0.12*log(tr.x), 0.0, 1.0); }
+`
+  },
+  {
+    key: 'julia',
+    name: 'Quaternion-Julia',
+    short: 'Julia',
+    sub: 'Eine Julia-Menge in vier Dimensionen. Du siehst einen 3D-Schnitt, der sich in Echtzeit verformt.',
+    cam: { mode: 'orbit', target: [0, 0, 0], yaw: -0.5, pitch: 0.3, dist: 3.0, min: 1.8, max: 7, spin: 0.05, pmin: -1.4, pmax: 1.4 },
+    light: { dir: [-0.55, 0.65, 0.5], follow: true },
+    uniforms: t => {
+      const k = t * 0.16;
+      return { param: 0, c: [
+        0.45 * Math.cos(0.5 + k * 1.2) - 0.3,
+        0.45 * Math.cos(3.9 + k * 1.7),
+        0.45 * Math.cos(1.4 + k * 1.3),
+        0.45 * Math.cos(1.1 + k * 2.5)] };
+    },
+    label: u => `z ↦ z² + c,   c = ${fmt(u.c[0])} ${fmt(u.c[1])}i ${fmt(u.c[2])}j ${fmt(u.c[3])}k`,
+    glsl: `
+#define BOUND 1.7
+#define FAR 12.0
+#define MAX_STEPS 170
+#define STEP_K 1.0
+#define PREC 1.0
+#define USE_AO 1
+#define AO_SCALE 0.6
+#define USE_SHADOW 1
+#define SHADOW_STEPS 48
+#define SHADOW_FAR 3.0
+#define SHADOW_K 8.0
+#define STARS 0
+#define SPEC_POW 64.0
+#define SPEC_K 5.0
+#define FOG_DENS 0.0
+#define GLOW_K 1.4
+#define EXPOSURE 1.0
+#define BG_LO -0.9
+#define BG_HI 0.9
+const vec3 KEY_COL  = vec3(2.6, 2.4, 2.5);
+const vec3 SKY_COL  = vec3(0.40, 0.30, 0.55);
+const vec3 BACK_COL = vec3(0.10, 0.35, 0.38);
+const vec3 RIM_COL  = vec3(0.90, 0.45, 0.75);
+const vec3 SUN_COL  = vec3(0.10, 0.08, 0.14);
+const vec3 BG_TOP   = vec3(0.035, 0.020, 0.060);
+const vec3 BG_BOT   = vec3(0.000, 0.012, 0.018);
+const vec3 GLOW_COL = vec3(0.85, 0.35, 1.00);
+
+float mapT(vec3 p, out vec4 trap) {
+  vec4 z = vec4(p, 0.0);
+  float md2 = 1.0;
+  float mz2 = dot(z, z);
+  vec4 tr = vec4(abs(z.xyz), mz2);
+  for (int i = 0; i < 11; i++) {
+    md2 *= 4.0*mz2;
+    z = vec4(z.x*z.x - dot(z.yzw, z.yzw), 2.0*z.x*z.yzw) + uC;
+    mz2 = dot(z, z);
+    tr = min(tr, vec4(abs(z.xyz), mz2));
+    if (mz2 > 4.0) break;
+  }
+  trap = tr;
+  return 0.25*sqrt(mz2/md2)*log(mz2);
+}
+
+vec3 surfColor(vec4 tr, vec3 p, vec3 n) {
+  float k = 0.55 + 0.8*sqrt(tr.w) + 0.3*tr.x;
+  vec3 col = 0.5 + 0.5*cos(6.28318*(k + vec3(0.0, 0.15, 0.30)));
+  col = mix(col*col, vec3(0.86, 0.82, 0.92), 0.3);
+  return col*0.5;
+}
+float trapOcc(vec4 tr) { return clamp(0.35 + 1.4*sqrt(tr.w), 0.0, 1.0); }
+`
+  },
+  {
+    key: 'menger',
+    name: 'Menger-Schwamm',
+    short: 'Menger',
+    sub: 'Volumen null, Oberfläche unendlich. Er dreht sich, atmet – und wirft dabei echte weiche Schatten.',
+    cam: { mode: 'orbit', target: [0, -0.3, 0], yaw: 0.55, pitch: 0.36, dist: 4.7, min: 2.4, max: 9, spin: 0, pmin: 0.04, pmax: 1.35 },
+    light: { dir: [-0.52, 0.62, 0.59], follow: false },
+    uniforms: t => ({ param: 1.0 + 0.11 * Math.sin(t * 0.37), c: [t * 0.09, 0, 0, 0] }),
+    label: u => `Rekursionstiefe 5   ·   Lochfaktor ${u.param.toFixed(3)}`,
+    glsl: `
+#define FAR 40.0
+#define MAX_STEPS 190
+#define STEP_K 1.0
+#define PREC 1.0
+#define USE_AO 1
+#define AO_SCALE 0.8
+#define USE_SHADOW 1
+#define SHADOW_STEPS 72
+#define SHADOW_FAR 7.0
+#define SHADOW_K 14.0
+#define STARS 0
+#define SPEC_POW 24.0
+#define SPEC_K 1.5
+#define FOG_DENS 0.0022
+#define GLOW_K 0.0
+#define EXPOSURE 0.95
+#define BG_LO -0.02
+#define BG_HI 0.38
+#define FLOOR_Y 1.45
+const vec3 KEY_COL  = vec3(3.9, 2.55, 1.45);
+const vec3 SKY_COL  = vec3(0.30, 0.42, 0.68);
+const vec3 BACK_COL = vec3(0.30, 0.20, 0.14);
+const vec3 RIM_COL  = vec3(0.25, 0.25, 0.30);
+const vec3 SUN_COL  = vec3(1.60, 0.90, 0.45);
+const vec3 BG_TOP   = vec3(0.07, 0.15, 0.38);
+const vec3 BG_BOT   = vec3(0.90, 0.56, 0.34);
+const vec3 GLOW_COL = vec3(0.0);
+
+float sdBox(vec3 p, vec3 b) {
+  vec3 d = abs(p) - b;
+  return min(max(d.x, max(d.y, d.z)), 0.0) + length(max(d, 0.0));
+}
+
+float mapT(vec3 p, out vec4 trap) {
+  float fl = p.y + FLOOR_Y;
+  vec3 q = p;
+  float ca = cos(uC.x), sa = sin(uC.x);
+  q.xz = mat2(ca, -sa, sa, ca) * q.xz;
+  float d = sdBox(q, vec3(1.0));
+  vec4 res = vec4(d, 1.0, 0.0, 0.0);
+  float s = 1.0;
+  for (int m = 0; m < 5; m++) {
+    vec3 a = mod(q*s, 2.0) - 1.0;
+    s *= 3.0;
+    vec3 r = abs(1.0 - 3.0*abs(a));
+    float da = max(r.x, r.y);
+    float db = max(r.y, r.z);
+    float dc = max(r.z, r.x);
+    float c = (min(da, min(db, dc)) - uParam) / s;
+    if (c > d) {
+      d = c;
+      res = vec4(d, min(res.y, 0.2*da*db*dc), (1.0 + float(m))/4.0, 0.0);
+    }
+  }
+  if (fl < d) { trap = vec4(fl, 1.0, 0.0, 1.0); return fl; }
+  trap = res;
+  return d;
+}
+
+vec3 surfColor(vec4 tr, vec3 p, vec3 n) {
+  if (tr.w > 0.5) {
+    // Boden mit feinem, kantengeglättetem Raster
+    vec3 col = mix(vec3(0.56, 0.52, 0.48), vec3(0.40, 0.38, 0.37), smoothstep(2.0, 14.0, length(p.xz))) * 0.5;
+    vec3 v = p - uRo;
+    float t = length(v);
+    float fw = 1.5 * t / (SHORT_SIDE * uFocal) / max(abs(v.y / t), 0.05);
+    vec2 g = 0.5 - abs(fract(p.xz) - 0.5);
+    float line = 1.0 - smoothstep(0.003, 0.003 + fw, min(g.x, g.y));
+    line *= 1.0 - smoothstep(0.04, 0.18, fw);
+    return col * (1.0 - 0.28*line);
+  }
+  vec3 col = mix(vec3(0.80, 0.76, 0.70), vec3(0.95, 0.42, 0.20), smoothstep(0.3, 1.3, tr.z));
+  return col * 0.5;
+}
+float trapOcc(vec4 tr) { return tr.w > 0.5 ? 1.0 : clamp(0.45 + 0.55*tr.y, 0.0, 1.0); }
+`
+  },
+  {
+    key: 'apollo',
+    name: 'Apollonisches Netz',
+    short: 'Apollon',
+    sub: 'Kugelinversion, unendlich oft wiederholt. Ein Flug durch einen Raum, der niemals endet.',
+    cam: { mode: 'path', yaw: 0, pitch: 0, focal: 1.7, min: 1.1, max: 4.5 },
+    light: { dir: [0.577, 0.577, -0.577], follow: false },
+    bright: true,
+    uniforms: t => ({ param: 1.1 + 0.5 * smoothstep(-0.3, 0.3, Math.cos(0.1 * t)), c: [0, 0, 0, 0] }),
+    label: u => `p ↦ s·p / |p|²   ·   s = ${u.param.toFixed(3)}`,
+    path: t => {
+      const k = t * 0.25;
+      return {
+        ro: [2.8 * Math.cos(0.1 + 0.33 * k), 0.4 + 0.30 * Math.cos(0.37 * k), 2.8 * Math.cos(0.5 + 0.35 * k)],
+        ta: [1.9 * Math.cos(1.2 + 0.41 * k), 0.4 + 0.10 * Math.cos(0.27 * k), 1.9 * Math.cos(2.0 + 0.38 * k)],
+      };
+    },
+    glsl: `
+#define FAR 16.0
+#define MAX_STEPS 220
+#define STEP_K 1.0
+#define PREC 1.2
+#define USE_AO 0
+#define AO_SCALE 1.0
+#define USE_SHADOW 0
+#define SHADOW_STEPS 1
+#define SHADOW_FAR 1.0
+#define SHADOW_K 8.0
+#define STARS 0
+#define SPEC_POW 16.0
+#define SPEC_K 0.8
+#define FOG_DENS 0.035
+#define GLOW_K 0.0
+#define EXPOSURE 1.05
+#define BG_LO -1.0
+#define BG_HI 1.0
+const vec3 KEY_COL  = vec3(1.55, 1.45, 1.30);
+const vec3 SKY_COL  = vec3(0.55, 0.55, 0.60);
+const vec3 BACK_COL = vec3(0.45, 0.40, 0.38);
+const vec3 RIM_COL  = vec3(0.30, 0.28, 0.25);
+const vec3 SUN_COL  = vec3(0.0);
+const vec3 BG_TOP   = vec3(1.05, 1.00, 0.94);
+const vec3 BG_BOT   = vec3(0.70, 0.66, 0.62);
+const vec3 GLOW_COL = vec3(0.0);
+
+float mapT(vec3 p, out vec4 trap) {
+  float scale = 1.0;
+  vec4 orb = vec4(1000.0);
+  for (int i = 0; i < 8; i++) {
+    p = -1.0 + 2.0*fract(0.5*p + 0.5);
+    float r2 = dot(p, p);
+    orb = min(orb, vec4(abs(p), r2));
+    float k = uParam / r2;
+    p *= k;
+    scale *= k;
+  }
+  trap = orb;
+  return 0.25*abs(p.y)/scale;
+}
+
+vec3 surfColor(vec4 tr, vec3 p, vec3 n) {
+  vec3 col = vec3(0.92, 0.90, 0.86);
+  col = mix(col, vec3(1.00, 0.72, 0.22), clamp(6.0*tr.y, 0.0, 1.0));
+  col = mix(col, vec3(0.95, 0.42, 0.06), pow(clamp(1.0 - 2.0*tr.z, 0.0, 1.0), 8.0));
+  return col*0.62;
+}
+float trapOcc(vec4 tr) { return pow(clamp(tr.w*2.0, 0.0, 1.0), 1.2); }
+`
+  },
+];
+
+/* =====================================================================
+   WebGL
+   ===================================================================== */
+
+const $ = id => document.getElementById(id);
+const canvas = $('gl');
+const ui = {
+  name: $('name'), sub: $('sub'), formula: $('formula'),
+  fps: $('fps'), rays: $('rays'), res: $('res'),
+  scenes: $('scenes'), intro: $('intro'), toast: $('toast'), fade: $('fade'), err: $('err'),
+};
+
+const params = new URLSearchParams(location.search);
+const fixedQuality = params.has('quality') ? Math.min(1, Math.max(0.1, +params.get('quality') || 1)) : 0;
+
+const gl = canvas.getContext('webgl', {
+  antialias: false, alpha: false, depth: false, stencil: false,
+  powerPreference: 'high-performance', preserveDrawingBuffer: false,
+});
+
+function fail(msg, detail) {
+  ui.err.hidden = false;
+  ui.err.innerHTML = `<div><p>${msg}</p>${detail ? `<pre>${detail.replace(/</g, '&lt;')}</pre>` : ''}</div>`;
+  endIntro();
+  ui.fade.classList.add('off');
+}
+
+if (!gl) { fail('Dein Browser stellt leider kein WebGL bereit.'); return; }
+
+let programs = [];
+let quad = null;
+
+function initGL() {
+  programs = [];
+  quad = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, quad);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(0);
+  gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+}
+
+function compileShader(type, src) {
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src);
+  gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+    const log = gl.getShaderInfoLog(s);
+    gl.deleteShader(s);
+    throw new Error(log || 'Shader konnte nicht kompiliert werden');
+  }
+  return s;
+}
+
+function getProgram(i) {
+  if (programs[i]) return programs[i];
+  const p = gl.createProgram();
+  gl.attachShader(p, compileShader(gl.VERTEX_SHADER, VERT));
+  gl.attachShader(p, compileShader(gl.FRAGMENT_SHADER, FRAG_HEAD + SCENES[i].glsl + FRAG_COMMON));
+  gl.bindAttribLocation(p, 0, 'aPos');
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+  const u = n => gl.getUniformLocation(p, n);
+  programs[i] = {
+    p, uRes: u('uRes'), uTime: u('uTime'), uRo: u('uRo'), uTa: u('uTa'),
+    uFocal: u('uFocal'), uParam: u('uParam'), uC: u('uC'), uLight: u('uLight'),
+  };
+  return programs[i];
+}
+
+initGL();
+
+/* =====================================================================
+   Zustand, Kamera, Eingabe
+   ===================================================================== */
+
+const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const state = {
+  scene: 0,
+  simTime: 0,
+  paused: false,
+  lastInput: -1e9,
+  sceneSince: 0,
+  switching: false,
+};
+const cam = { yaw: 0, pitch: 0, dist: 3, focal: 1.8, tYaw: 0, tPitch: 0, tDist: 3, tFocal: 1.8 };
+let ro = [0, 0, 3], ta = [0, 0, 0];
+
+function resetCamera(s) {
+  cam.yaw = cam.tYaw = s.cam.yaw;
+  cam.pitch = cam.tPitch = s.cam.pitch;
+  cam.dist = cam.tDist = s.cam.dist || 3;
+  cam.focal = cam.tFocal = s.cam.focal || 1.8;
+}
+
+function updateCamera(dt) {
+  const s = SCENES[state.scene];
+  const idle = performance.now() - state.lastInput > 3500;
+  if (idle && !state.paused) {
+    if (s.cam.mode === 'orbit') cam.tYaw += dt * s.cam.spin * (reducedMotion ? 0.3 : 1);
+    else { const d = Math.exp(-dt * 0.5); cam.tYaw *= d; cam.tPitch *= d; cam.tFocal += (s.cam.focal - cam.tFocal) * (1 - d); }
+  }
+  const k = 1 - Math.exp(-dt * 7);
+  cam.yaw += (cam.tYaw - cam.yaw) * k;
+  cam.pitch += (cam.tPitch - cam.pitch) * k;
+  cam.dist += (cam.tDist - cam.dist) * k;
+  cam.focal += (cam.tFocal - cam.focal) * k;
+
+  if (s.cam.mode === 'orbit') {
+    const t = s.cam.target, cp = Math.cos(cam.pitch);
+    ta = t;
+    ro = [t[0] + cam.dist * cp * Math.sin(cam.yaw), t[1] + cam.dist * Math.sin(cam.pitch), t[2] + cam.dist * cp * Math.cos(cam.yaw)];
+  } else {
+    const path = s.path(state.simTime);
+    ro = path.ro;
+    const f = [path.ta[0] - ro[0], path.ta[1] - ro[1], path.ta[2] - ro[2]];
+    const len = Math.hypot(f[0], f[1], f[2]);
+    const yaw = Math.atan2(f[0], f[2]) + cam.yaw;
+    const pitch = Math.max(-1.45, Math.min(1.45, Math.asin(f[1] / len) + cam.pitch));
+    ta = [ro[0] + Math.cos(pitch) * Math.sin(yaw), ro[1] + Math.sin(pitch), ro[2] + Math.cos(pitch) * Math.cos(yaw)];
+  }
+}
+
+// Bei schwebenden Objekten wandert das Licht mit der Kamera mit, damit sie nie im Gegenlicht versinken.
+function lightDir(s) {
+  const [x, y, z] = s.light.dir;
+  const a = s.light.follow ? cam.yaw : 0, c = Math.cos(a), n = Math.sin(a);
+  const v = [x * c + z * n, y, -x * n + z * c];
+  const l = Math.hypot(v[0], v[1], v[2]);
+  return [v[0] / l, v[1] / l, v[2] / l];
+}
+
+function zoom(factor) {
+  const s = SCENES[state.scene];
+  if (s.cam.mode === 'orbit') cam.tDist = Math.min(s.cam.max, Math.max(s.cam.min, cam.tDist * factor));
+  else cam.tFocal = Math.min(s.cam.max * 1.6, Math.max(s.cam.min, cam.tFocal / factor));
+}
+
+function rotate(dx, dy) {
+  const s = SCENES[state.scene];
+  if (s.cam.mode === 'orbit') {
+    cam.tYaw -= dx * 0.006;
+    cam.tPitch = Math.min(s.cam.pmax, Math.max(s.cam.pmin, cam.tPitch + dy * 0.006));
+  } else {
+    cam.tYaw += dx * 0.004;
+    cam.tPitch = Math.min(1.2, Math.max(-1.2, cam.tPitch + dy * 0.004));
+  }
+}
+
+function endIntro() {
+  ui.intro.classList.add('gone');
+  document.body.classList.remove('intro');
+}
+
+function touched() {
+  state.lastInput = performance.now();
+  endIntro();
+}
+
+const pointers = new Map();
+let pinchDist = 0;
+let lastTap = 0;
+
+canvas.addEventListener('pointerdown', e => {
+  canvas.setPointerCapture(e.pointerId);
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (pointers.size === 2) {
+    const [a, b] = [...pointers.values()];
+    pinchDist = Math.hypot(a.x - b.x, a.y - b.y);
+  }
+  if (e.pointerType === 'touch' && pointers.size === 1) {
+    const now = performance.now();
+    if (now - lastTap < 300) toggleUI();
+    lastTap = now;
+  }
+  touched();
+});
+canvas.addEventListener('pointermove', e => {
+  const p = pointers.get(e.pointerId);
+  if (!p) return;
+  const dx = e.clientX - p.x, dy = e.clientY - p.y;
+  p.x = e.clientX; p.y = e.clientY;
+  if (pointers.size === 1) rotate(dx, dy);
+  else if (pointers.size === 2) {
+    const [a, b] = [...pointers.values()];
+    const d = Math.hypot(a.x - b.x, a.y - b.y);
+    if (pinchDist > 0 && d > 0) zoom(pinchDist / d);
+    pinchDist = d;
+  }
+  touched();
+});
+const endPointer = e => { pointers.delete(e.pointerId); pinchDist = 0; };
+canvas.addEventListener('pointerup', endPointer);
+canvas.addEventListener('pointercancel', endPointer);
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  const d = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
+  zoom(Math.exp(Math.max(-60, Math.min(60, d)) * 0.0015));
+  touched();
+}, { passive: false });
+canvas.addEventListener('dblclick', () => { touched(); toggleUI(); });
+
+function toast(msg) {
+  ui.toast.textContent = msg;
+  ui.toast.classList.add('show');
+  clearTimeout(toast.t);
+  toast.t = setTimeout(() => ui.toast.classList.remove('show'), 1400);
+}
+function toggleUI() { document.body.classList.toggle('hide-ui'); }
+function togglePause() {
+  state.paused = !state.paused;
+  document.body.classList.toggle('paused', state.paused);
+  toast(state.paused ? 'Pausiert' : 'Weiter');
+}
+
+let screenshotPending = false;
+
+window.addEventListener('keydown', e => {
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  const k = e.key.toLowerCase();
+  if (k >= '1' && k <= String(SCENES.length)) setScene(+k - 1);
+  else if (k === ' ') { e.preventDefault(); togglePause(); }
+  else if (k === 'h') toggleUI();
+  else if (k === 's') screenshotPending = true;
+  else if (k === 'f') {
+    if (document.fullscreenElement) document.exitFullscreen();
+    else document.documentElement.requestFullscreen?.().catch(() => {});
+  }
+  else if (k === 'arrowright') setScene((state.scene + 1) % SCENES.length);
+  else if (k === 'arrowleft') setScene((state.scene + SCENES.length - 1) % SCENES.length);
+  else return;
+  touched();
+});
+
+/* =====================================================================
+   Szenenwechsel & HUD
+   ===================================================================== */
+
+SCENES.forEach((s, i) => {
+  const b = document.createElement('button');
+  b.innerHTML = `<kbd>${i + 1}</kbd><span class="long">${s.name}</span><span class="short">${s.short}</span>`;
+  b.addEventListener('click', () => { touched(); setScene(i); });
+  ui.scenes.appendChild(b);
+});
+
+function applyScene(i) {
+  getProgram(i);
+  state.scene = i;
+  state.sceneSince = state.simTime;
+  const s = SCENES[i];
+  resetCamera(s);
+  ui.name.textContent = s.name;
+  ui.sub.textContent = s.sub;
+  document.body.classList.toggle('bright', !!s.bright);
+  [...ui.scenes.children].forEach((b, j) => b.classList.toggle('on', j === i));
+  if (location.hash !== '#' + (i + 1)) history.replaceState(null, '', '#' + (i + 1));
+  perf.settle = 30;
+}
+
+function setScene(i) {
+  if (i === state.scene || state.switching) return;
+  state.switching = true;
+  ui.fade.classList.remove('off');
+  setTimeout(() => {
+    try { applyScene(i); }
+    catch (err) { fail('Shader-Fehler', String(err.message || err)); return; }
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      ui.fade.classList.add('off');
+      state.switching = false;
+    }));
+  }, 360);
+}
+
+/* =====================================================================
+   Adaptive Auflösung: hält die Bildrate flüssig, egal wie stark die GPU ist
+   ===================================================================== */
+
+const perf = { quality: fixedQuality || 0.55, acc: 0, n: 0, settle: 30, fpsN: 0, fpsT: 0, fps: 0 };
+
+function resize() {
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const w = Math.max(2, Math.round(innerWidth * dpr * perf.quality));
+  const h = Math.max(2, Math.round(innerHeight * dpr * perf.quality));
+  if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+}
+
+function adapt(rawDt) {
+  if (fixedQuality) return;
+  if (perf.settle > 0) { perf.settle--; return; }
+  perf.acc += rawDt; perf.n++;
+  if (perf.n < 20) return;
+  const ms = perf.acc / perf.n * 1000;
+  if (ms > 26 && perf.quality > 0.25) perf.quality = Math.max(0.25, perf.quality * (ms > 45 ? 0.75 : 0.88));
+  else if (ms < 19 && perf.quality < 1) perf.quality = Math.min(1, perf.quality * 1.1);
+  perf.acc = 0; perf.n = 0; perf.settle = 4;
+}
+
+const fmtBig = n => n >= 1e9 ? (n / 1e9).toFixed(2) + ' Mrd.' : n >= 1e6 ? (n / 1e6).toFixed(0) + ' Mio.' : Math.round(n / 1e3) + ' Tsd.';
+
+/* =====================================================================
+   Hauptschleife
+   ===================================================================== */
+
+let last = performance.now();
+let lost = false;
+
+function frame(now) {
+  if (lost) return;
+  requestAnimationFrame(frame);
+  const rawDt = Math.min(0.25, (now - last) / 1000);
+  last = now;
+  const dt = Math.min(rawDt, 0.1);
+  if (!state.paused) state.simTime += dt * (reducedMotion ? 0.35 : 1);
+
+  // Autopilot: nach längerer Ruhe zur nächsten Szene
+  if (!state.paused && !state.switching && now - state.lastInput > 30000 && state.simTime - state.sceneSince > 30) {
+    setScene((state.scene + 1) % SCENES.length);
+  }
+
+  adapt(rawDt);
+  updateCamera(dt);
+
+  const shot = screenshotPending;
+  const q = perf.quality;
+  if (shot) perf.quality = 1;
+  resize();
+
+  const s = SCENES[state.scene];
+  const u = s.uniforms(state.simTime);
+  const P = programs[state.scene];
+  gl.viewport(0, 0, canvas.width, canvas.height);
+  gl.useProgram(P.p);
+  gl.uniform2f(P.uRes, canvas.width, canvas.height);
+  gl.uniform1f(P.uTime, state.simTime);
+  gl.uniform3fv(P.uRo, ro);
+  gl.uniform3fv(P.uTa, ta);
+  gl.uniform1f(P.uFocal, cam.focal);
+  gl.uniform1f(P.uParam, u.param);
+  gl.uniform4fv(P.uC, u.c);
+  gl.uniform3fv(P.uLight, lightDir(s));
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+  if (shot) {
+    screenshotPending = false;
+    canvas.toBlob(blob => {
+      if (!blob) return;
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `hier-${s.key}-${Date.now()}.png`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+      toast('Screenshot gespeichert');
+    }, 'image/png');
+    perf.quality = q;
+    perf.settle = 10;
+  }
+
+  // HUD
+  perf.fpsN++; perf.fpsT += rawDt;
+  if (perf.fpsT > 0.4) {
+    perf.fps = perf.fpsN / perf.fpsT;
+    perf.fpsN = 0; perf.fpsT = 0;
+    ui.fps.textContent = perf.fps.toFixed(0);
+    ui.rays.textContent = fmtBig(canvas.width * canvas.height * perf.fps);
+    ui.res.textContent = `${canvas.width}×${canvas.height}`;
+  }
+  ui.formula.textContent = s.label(u);
+}
+
+canvas.addEventListener('webglcontextlost', e => { e.preventDefault(); lost = true; }, false);
+canvas.addEventListener('webglcontextrestored', () => {
+  lost = false;
+  initGL();
+  try { getProgram(state.scene); } catch (err) { fail('Shader-Fehler', String(err.message || err)); return; }
+  last = performance.now();
+  requestAnimationFrame(frame);
+}, false);
+document.addEventListener('visibilitychange', () => { last = performance.now(); });
+window.addEventListener('hashchange', () => {
+  const i = (parseInt(location.hash.slice(1), 10) || 1) - 1;
+  if (i >= 0 && i < SCENES.length) setScene(i);
+});
+
+/* =====================================================================
+   Start
+   ===================================================================== */
+
+const startScene = Math.min(SCENES.length - 1, Math.max(0, (parseInt(location.hash.slice(1), 10) || 1) - 1));
+try { applyScene(startScene); }
+catch (err) { fail('Shader-Fehler', String(err.message || err)); return; }
+
+requestAnimationFrame(frame);
+requestAnimationFrame(() => requestAnimationFrame(() => ui.fade.classList.add('off')));
+setTimeout(endIntro, 4200);
+})();
+</script>
+</body>
+</html>
